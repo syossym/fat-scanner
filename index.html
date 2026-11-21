@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Fat100 — Nutrition Label Fat Scanner (g / 100g)</title>
+  <meta name="description" content="Take a photo of any nutritional values label to instantly extract its fat content in grams per 100g. Private on-device OCR built for iPhone." />
+
+  <!-- iOS Web App / PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Fat100" />
+  <meta name="theme-color" content="#F7F5F0" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+
+  <!-- Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Compact Top Bar -->
+    <header class="top-bar">
+      <button type="button" id="brand-reset-btn" class="brand" aria-label="Fat100 Home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+            <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+            <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+            <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+            <path d="M12 7.5c-2.2 2.9-3.5 4.7-3.5 6.5a3.5 3.5 0 0 0 7 0c0-1.8-1.3-3.6-3.5-6.5Z" fill="currentColor" stroke="none" />
+          </svg>
+        </span>
+        <span class="brand-name">Fat100</span>
+      </button>
+
+      <div class="top-bar-actions">
+        <button type="button" id="new-scan-header-btn" class="ghost-btn hidden" aria-label="Start new scan">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+            <path d="M3 3v5h5" />
+          </svg>
+          <span>New</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hidden native file inputs (direct <label> association ensures rock-solid iOS Safari camera launch) -->
+    <input type="file" id="camera-input" accept="image/*" capture="environment" class="sr-only" />
+    <input type="file" id="library-input" accept="image/*" class="sr-only" />
+
+    <main class="main-content">
+      <!-- VIEW 1: HOME / CAPTURE -->
+      <section id="home-view" class="view home-view" aria-label="Scan nutrition label">
+        <div class="hero-copy">
+          <h1>Fat per 100g,<br />in one snap.</h1>
+          <p class="subtitle">
+            Photograph any nutrition label—whether listed per 100g or per serving—to read its fat content on device.
+          </p>
+        </div>
+
+        <div class="capture-card">
+          <div class="capture-illustration" aria-hidden="true">
+            <div class="label-card-mini">
+              <div class="mini-header">Nutrition Facts</div>
+              <div class="mini-rule thick"></div>
+              <div class="mini-row"><span>Energy</span><span>1840 kJ</span></div>
+              <div class="mini-row highlight"><span>Total Fat</span><span>14.5 g</span></div>
+              <div class="mini-row muted"><span>Saturates</span><span>2.1 g</span></div>
+              <div class="mini-row muted"><span>Carbohydrate</span><span>52.0 g</span></div>
+            </div>
+            <div class="mini-result-badge">
+              <span class="mini-num">14.5</span>
+              <span class="mini-unit">g / 100g</span>
+            </div>
+          </div>
+
+          <div class="capture-actions">
+            <label for="camera-input" id="take-photo-btn" class="btn btn-primary btn-large" role="button" tabindex="0">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" />
+                <circle cx="12" cy="13" r="3.5" />
+              </svg>
+              <span>Take Photo</span>
+            </label>
+
+            <label for="library-input" id="choose-photo-btn" class="btn btn-secondary" role="button" tabindex="0">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="3" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="m21 15-5-5L5 21" />
+              </svg>
+              <span>Choose from Photos</span>
+            </label>
+          </div>
+
+          <div class="sample-trigger-row">
+            <button type="button" id="try-sample-btn" class="text-link-btn">
+              Try with a sample label
+            </button>
+          </div>
+        </div>
+
+        <p class="privacy-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <span>100% private — photos stay on your phone.</span>
+        </p>
+
+        <!-- Recent Scans (shown only when history exists) -->
+        <section id="history-section" class="history-section hidden" aria-label="Recent scans">
+          <div class="section-head">
+            <h2>Recent scans</h2>
+            <button type="button" id="clear-history-btn" class="text-link-btn muted-link">Clear</button>
+          </div>
+          <ul id="history-list" class="history-list"></ul>
+        </section>
+      </section>
+
+      <!-- VIEW 2: SCANNING PROGRESS -->
+      <section id="scanning-view" class="view scanning-view hidden" aria-live="polite">
+        <div class="scan-stage-card">
+          <div class="scan-preview-frame">
+            <canvas id="scanning-preview-canvas" class="preview-canvas"></canvas>
+            <div class="scan-sweep" aria-hidden="true"></div>
+          </div>
+
+          <div class="scan-status-block">
+            <div class="scan-status-row">
+              <span id="scan-status-text" class="scan-status-label">Preparing photo…</span>
+              <span id="scan-percent-text" class="scan-percent">0%</span>
+            </div>
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="scan-progress-bar">
+              <div id="scan-progress-fill" class="progress-fill"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 3: RESULT & ADJUSTMENT -->
+      <section id="result-view" class="view result-view hidden" aria-label="Scan result">
+        <!-- Primary Fat Result Card -->
+        <article id="result-card" class="result-card">
+          <div class="result-top-row">
+            <span id="result-eyebrow" class="result-eyebrow">Fat content</span>
+            <span id="fat-level-tag" class="level-tag hidden"></span>
+          </div>
+
+          <!-- Success / Calculated numeric hero -->
+          <div id="result-hero-value" class="result-hero">
+            <span id="fat-prefix" class="fat-prefix hidden">&lt;</span>
+            <span id="fat-number" class="fat-number">0.0</span>
+            <span id="fat-unit" class="fat-unit">g / 100g</span>
+          </div>
+
+          <!-- Empty / Needs Serving state title -->
+          <div id="result-empty-hero" class="result-empty-hero hidden">
+            <p id="result-empty-title" class="empty-title">Couldn’t read fat per 100g yet</p>
+          </div>
+
+          <!-- Visual Fat Scale Bar -->
+          <div id="fat-scale-wrap" class="fat-scale-wrap">
+            <div class="fat-scale-track">
+              <div class="scale-zone zone-low" style="width: 10%"></div>
+              <div class="scale-zone zone-med" style="width: 34%"></div>
+              <div class="scale-zone zone-high" style="width: 56%"></div>
+              <div id="fat-scale-marker" class="scale-marker" style="left: 0%"></div>
+            </div>
+            <div class="fat-scale-labels">
+              <span>0g</span>
+              <span>Low ≤3g</span>
+              <span>High &gt;17.5g</span>
+              <span>40g+</span>
+            </div>
+          </div>
+
+          <!-- Explanation & matched snippet -->
+          <p id="result-explanation" class="result-explanation"></p>
+
+          <div id="result-warning" class="result-warning hidden" role="alert">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+            </svg>
+            <span id="result-warning-text"></span>
+          </div>
+
+          <div id="result-meta-strip" class="result-meta-strip hidden">
+            <span id="sat-fat-meta" class="meta-item hidden"></span>
+            <span id="matched-line-meta" class="meta-item mono hidden"></span>
+          </div>
+
+          <!-- Quick Edit / Calculator Toggle -->
+          <div class="card-footer-actions">
+            <button type="button" id="toggle-adjust-btn" class="inline-action-btn" aria-expanded="false">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+              <span id="toggle-adjust-label">Adjust numbers</span>
+            </button>
+
+            <button type="button" id="save-note-btn" class="inline-action-btn hidden">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                <polyline points="17 21 17 13 7 13 7 21" />
+              </svg>
+              <span>Save to recent</span>
+            </button>
+          </div>
+
+          <!-- Inline Adjust / Serving Converter Drawer -->
+          <div id="adjust-panel" class="adjust-panel hidden">
+            <div class="segmented-control" role="radiogroup" aria-label="Label value basis">
+              <button type="button" id="mode-per100-btn" class="seg-btn active" role="radio" aria-checked="true">
+                Per 100g
+              </button>
+              <button type="button" id="mode-serving-btn" class="seg-btn" role="radio" aria-checked="false">
+                Per serving
+              </button>
+            </div>
+
+            <div class="adjust-fields">
+              <label class="field-group" for="manual-fat-input">
+                <span class="field-label" id="manual-fat-label">Fat (g per 100g)</span>
+                <div class="input-with-unit">
+                  <input type="text" inputmode="decimal" id="manual-fat-input" placeholder="e.g. 14.5" autocomplete="off" />
+                  <span class="input-unit">g</span>
+                </div>
+              </label>
+
+              <label class="field-group hidden" id="manual-serving-group" for="manual-serving-input">
+                <span class="field-label">Serving weight</span>
+                <div class="input-with-unit">
+                  <input type="text" inputmode="decimal" id="manual-serving-input" placeholder="e.g. 55" autocomplete="off" />
+                  <span class="input-unit">g</span>
+                </div>
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <!-- Scanned Photo Card with Crop & Rotate tools -->
+        <section class="photo-tools-card" aria-label="Captured label photo">
+          <div class="photo-thumb-wrap">
+            <canvas id="result-photo-canvas" class="result-photo-canvas"></canvas>
+            <div id="detected-highlight-box" class="detected-highlight-box hidden" aria-hidden="true"></div>
+          </div>
+
+          <div class="photo-tool-buttons">
+            <button type="button" id="open-crop-btn" class="tool-btn">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+                <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+              </svg>
+              <span>Crop label</span>
+            </button>
+
+            <button type="button" id="rotate-photo-btn" class="tool-btn">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+              <span>Rotate 90°</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Collapsible Raw OCR Text Inspector -->
+        <details id="raw-ocr-details" class="raw-ocr-details">
+          <summary>Inspect scanned text</summary>
+          <pre id="raw-ocr-text" class="raw-ocr-text"></pre>
+        </details>
+
+        <!-- Primary Bottom Scan Again Bar -->
+        <div class="result-bottom-actions">
+          <label for="camera-input" id="scan-another-btn" class="btn btn-primary btn-large" role="button" tabindex="0">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" />
+              <circle cx="12" cy="13" r="3.5" />
+            </svg>
+            <span>Scan Another Label</span>
+          </label>
+          <label for="library-input" id="choose-another-btn" class="btn btn-secondary" role="button" tabindex="0">
+            <span>Choose Photo</span>
+          </label>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL: TOUCH-FRIENDLY CROP OVERLAY -->
+  <div id="crop-modal" class="crop-modal hidden" role="dialog" aria-modal="true" aria-label="Crop nutrition label">
+    <div class="crop-modal-header">
+      <button type="button" id="crop-cancel-btn" class="crop-hdr-btn">Cancel</button>
+      <span class="crop-hdr-title">Frame the nutrition table</span>
+      <button type="button" id="crop-apply-btn" class="crop-hdr-btn primary">Scan</button>
+    </div>
+
+    <div class="crop-stage-outer">
+      <div id="crop-stage" class="crop-stage">
+        <canvas id="crop-canvas" class="crop-canvas"></canvas>
+        <div id="crop-box" class="crop-box">
+          <div class="crop-grid-h"></div>
+          <div class="crop-grid-v"></div>
+          <div class="crop-handle handle-nw" data-handle="nw"></div>
+          <div class="crop-handle handle-ne" data-handle="ne"></div>
+          <div class="crop-handle handle-sw" data-handle="sw"></div>
+          <div class="crop-handle handle-se" data-handle="se"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="crop-modal-footer">
+      <button type="button" id="crop-reset-btn" class="crop-footer-btn">Reset full frame</button>
+      <button type="button" id="crop-rotate-btn" class="crop-footer-btn">Rotate 90°</button>
+    </div>
+  </div>
+
+  <!-- Tesseract.js v5 CDN (loaded cleanly from jsDelivr; WASM + eng model cached by browser) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
