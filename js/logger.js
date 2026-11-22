@@ -5,7 +5,7 @@
  * and notifies subscribers (such as the Settings -> Technical Log viewer).
  */
 
-export const APP_VERSION = 'v1.2.1';
+export const APP_VERSION = 'v1.2.2';
 const STORAGE_KEY = 'fat100_tech_log_v1';
 const MAX_ENTRIES = 200;
 

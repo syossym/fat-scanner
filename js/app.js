@@ -1,5 +1,5 @@
-import { logger, APP_VERSION } from './logger.js?v=3';
-import { parseNutritionLabel, combineScanPasses, classifyFatLevel } from './parser.js?v=3';
+import { logger, APP_VERSION } from './logger.js?v=4';
+import { parseNutritionLabel, combineScanPasses, classifyFatLevel } from './parser.js?v=4';
 import {
   loadImageToCanvas,
   rotateCanvas90,
@@ -9,8 +9,8 @@ import {
   preprocessForOcr,
   mapOcrBboxToNormalized,
   releaseCanvas,
-} from './image-processor.js?v=3';
-import { createSampleLabelCanvas } from './sample-labels.js?v=3';
+} from './image-processor.js?v=4';
+import { createSampleLabelCanvas } from './sample-labels.js?v=4';
 
 window.__fat100LoggerReady = true;
 
@@ -815,20 +815,34 @@ function renderResultView(parsed, highlightNorm) {
   if (els.rawOcrDetails) els.rawOcrDetails.open = false;
   if (els.rawOcrText) els.rawOcrText.textContent = parsed.rawText || '(No text recognized in this image)';
 
-  if (parsed.mode === 'converted_from_serving' || parsed.status === 'needs_serving') {
-    setAdjustMode('serving', false);
-    if (els.manualFatInput) els.manualFatInput.value = parsed.fatRawValue !== null ? String(parsed.fatRawValue) : '';
-    if (els.manualServingInput) els.manualServingInput.value = parsed.servingWeightG !== null ? String(parsed.servingWeightG) : '';
-  } else {
-    setAdjustMode('per100', false);
-    if (els.manualFatInput) els.manualFatInput.value = parsed.fatPer100g !== null ? String(parsed.fatPer100g) : '';
-    if (els.manualServingInput) els.manualServingInput.value = parsed.servingWeightG !== null ? String(parsed.servingWeightG) : '';
+  // If fat was found but neither "per 100g" nor a serving weight was read, default to Per 100g view
+  const assumedPer100 = parsed.status === 'needs_serving' && parsed.fatRawValue !== null;
+  const displayStatus = assumedPer100 ? 'success' : parsed.status;
+  const displayFatPer100g = assumedPer100
+    ? Math.round(parsed.fatRawValue * 10) / 10
+    : parsed.fatPer100g;
+
+  // Always default results to the Per 100g view
+  setAdjustMode('per100', false);
+  if (els.manualFatInput) {
+    els.manualFatInput.value = displayFatPer100g !== null ? String(displayFatPer100g) : '';
+  }
+  if (els.manualServingInput) {
+    els.manualServingInput.value = parsed.servingWeightG !== null ? String(parsed.servingWeightG) : '';
   }
 
+  const displayExplanation = assumedPer100
+    ? `Showing ${formatFatNumber(displayFatPer100g)}g per 100g (no serving size detected). Tap “Adjust numbers” → “Per serving” if this label is per serving.`
+    : parsed.explanation;
+
+  const displayWarning =
+    assumedPer100 && /couldn't read the serving weight/i.test(parsed.explanation || '')
+      ? 'This looks like a per-serving label without a readable serving weight. Showing raw fat as per 100g—switch to “Per serving” to convert.'
+      : parsed.warning;
+
   const shouldAutoOpen =
-    parsed.status === 'needs_serving' ||
     parsed.status === 'not_found' ||
-    Boolean(parsed.warning);
+    Boolean(displayWarning);
   setAdjustPanelOpen(shouldAutoOpen);
 
   const servingSummary =
@@ -837,19 +851,19 @@ function renderResultView(parsed, highlightNorm) {
       : null;
 
   applyDisplayMetrics({
-    status: parsed.status,
-    fatPer100g: parsed.fatPer100g,
+    status: displayStatus,
+    fatPer100g: displayFatPer100g,
     basisUnit: parsed.basisUnit || '100g',
     isLessThan: parsed.isLessThan,
-    explanation: parsed.explanation,
-    warning: parsed.warning,
+    explanation: displayExplanation,
+    warning: displayWarning,
     servingSummary,
     saturatedFatPer100g: parsed.saturatedFatPer100g,
     matchedLine: parsed.matchedLine,
   });
 
-  if (parsed.status === 'needs_serving') {
-    setTimeout(() => els.manualServingInput?.focus(), 200);
+  if (assumedPer100 && displayFatPer100g !== null && !displayWarning) {
+    saveToHistory(displayFatPer100g, parsed.basisUnit || '100g', state.currentScanLabel);
   }
 }
 
@@ -954,6 +968,9 @@ function renderErrorResult(message) {
   }
   els.detectedHighlightBox?.classList.add('hidden');
   if (els.rawOcrText) els.rawOcrText.textContent = message;
+  setAdjustMode('per100', false);
+  if (els.manualFatInput) els.manualFatInput.value = '';
+  if (els.manualServingInput) els.manualServingInput.value = '';
   setAdjustPanelOpen(true);
   applyDisplayMetrics({
     status: 'not_found',
@@ -975,8 +992,25 @@ function setAdjustPanelOpen(open) {
 }
 
 function setAdjustMode(mode, recalculate) {
+  const prevMode = state.adjustMode;
   state.adjustMode = mode;
   const isServing = mode === 'serving';
+
+  // Sync values cleanly when user switches between Per 100g and Per serving tabs
+  if (recalculate && prevMode !== mode && els.manualFatInput) {
+    const curFat = parseDecimalInput(els.manualFatInput.value || '');
+    const curServ = parseDecimalInput(els.manualServingInput?.value || '');
+    if (isServing) {
+      if (state.lastParsed?.mode === 'converted_from_serving' && state.lastParsed.fatRawValue !== null) {
+        els.manualFatInput.value = String(state.lastParsed.fatRawValue);
+        if (els.manualServingInput && state.lastParsed.servingWeightG) {
+          els.manualServingInput.value = String(state.lastParsed.servingWeightG);
+        }
+      }
+    } else if (curFat !== null && curServ !== null && curServ > 0) {
+      els.manualFatInput.value = String(Math.round((curFat / curServ) * 1000) / 10);
+    }
+  }
 
   els.modePer100Btn?.classList.toggle('active', !isServing);
   els.modePer100Btn?.setAttribute('aria-checked', String(!isServing));
