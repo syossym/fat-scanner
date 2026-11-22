@@ -489,6 +489,20 @@ body {
   min-width: 0;
 }
 
+.history-item-name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink-primary);
+  font-family: var(--font-body);
+}
+
 .history-item-name {
   font-size: 0.92rem;
   font-weight: 600;
@@ -496,6 +510,31 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.history-edit-icon {
+  flex-shrink: 0;
+  color: var(--ink-muted);
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.history-item-name-btn:hover .history-edit-icon {
+  opacity: 1;
+}
+
+.history-name-input {
+  width: 100%;
+  max-width: 210px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1.5px solid var(--accent);
+  background: #ffffff;
+  color: var(--ink-primary);
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 600;
+  outline: none;
 }
 
 .history-item-time {

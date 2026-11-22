@@ -1152,6 +1152,155 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+const NUTRITION_HEADER_START_RE =
+  /\b(?:nutrition(?:al)?\s*(?:facts|information|values?|info|per|declaration)|n[aä]hrwerte|valeurs?\s+nutritionnelles?|informaci[oó]n\s+nutricional|valori\s+nutrizionali|voedingswaarde|typical\s+values|serving\s*size|serv\.?\s*size|amount\s+per\s+serving|per\s+100\s*(?:g|ml))\b/i;
+
+const NON_PRODUCT_LINE_RE =
+  /\b(?:nutrition(?:al)?|facts|typical\s+values?|per\s+100\s*(?:g|ml)|per\s+serving|per\s+container|per\s+portion|serv(?:ing)?\.?\s*size|servings?\s+per|amount\s+per|calories?|energy|kcal|kj|total\s+fat|saturated|saturates?|sat\.?\s*fat|trans\s+fat|cholesterol|cholest\.?|sodium|potassium|carbohydrate|carb\.?|dietary\s+fib(?:er|re)|fib(?:er|re)|total\s+sugars?|added\s+sugars?|sugars?|protein|salt|vitamin|calcium|iron|daily\s+value|%\s*dv\b|reference\s+intake|based\s+on\s+a\s+2,?000|ingredients?|zutaten|ingr[eé]dients?|ingredientes|contains\b|may\s+contain|allergens?|allergy|produced\s+in\s+a|made\s+in\s+a|net\s*wt|net\s*weight|weight|best\s+before|use\s+by|sell\s+by|best\s+by|exp\.?\s*date|keep\s+refrigerat\w*|keep\s+frozen|refrigerat\w*\s+after|store\s+in|shake\s+well|microwave|heating|directions?|instructions?|preparation|distributed\s+by|manufactured|packed\s+(?:by|for)|produced\s+by|imported\s+by|product\s+of|made\s+in\b|questions|comments|call\s+1|recycle|recyclable|plastic|carton|barcode|patent|copyright|trademark|www\.|https?:|\.com\b|\.co\.uk\b|\.org\b|\.net\b)\b/i;
+
+const STANDALONE_CLAIM_BADGE_RE =
+  /^(?:certified\s+)?(?:organic|usda\s+organic|vegan|vegetarian|plant[\s-]?based|gluten[\s-]?free|dairy[\s-]?free|nut[\s-]?free|soy[\s-]?free|sugar[\s-]?free|no\s+added\s+sugar|low[\s-]?fat|fat[\s-]?free|non[\s-]?fat|reduced[\s-]?fat|high\s+protein|non[\s-]?gmo|kosher|halal|natural|all\s+natural|100%\s+natural|fresh|new|original|classic|family\s+size|value\s+size|party\s+size|limited\s+edition|keep\s+cold|ready\s+to\s+eat|ready\s+to\s+drink)[!.\s]*$/i;
+
+const LOWERCASE_TITLE_WORDS = new Set(['and', 'or', 'of', 'in', 'with', 'for', 'the', 'a', 'an', 'on', 'to', 'de', 'du', 'la', 'le', 'et', 'con', 'und', 'mit']);
+
+function cleanProductTitle(raw) {
+  let s = String(raw || '')
+    .replace(/[®™©•·|*_=~<>[\]{}]+/g, ' ')
+    .replace(/^[\s\-–—:;,.!?/\\()]+|[\s\-–—:;,.!?/\\()]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!s) return '';
+
+  // Convert ALL CAPS titles (e.g. "ORGANIC ALMOND BUTTER") to clean Title Case
+  const letters = s.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, '');
+  const upperCount = (letters.match(/[A-ZÀ-ÖØ-Þ]/g) || []).length;
+  if (letters.length >= 4 && upperCount / letters.length > 0.85) {
+    s = s
+      .toLowerCase()
+      .split(' ')
+      .map((word, idx) => {
+        if (!word) return '';
+        if (idx > 0 && LOWERCASE_TITLE_WORDS.has(word)) return word;
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      })
+      .join(' ');
+  }
+
+  return s;
+}
+
+function isPlausibleProductLine(text) {
+  const cleaned = cleanProductTitle(text);
+  if (!cleaned) return false;
+  if (cleaned.length < 3 || cleaned.length > 56) return false;
+
+  // Reject trailing punctuation suggesting a sentence or section header
+  if (/[,:;]$/.test(text.trim())) return false;
+  if (NON_PRODUCT_LINE_RE.test(cleaned)) return false;
+  if (STANDALONE_CLAIM_BADGE_RE.test(cleaned)) return false;
+
+  // Reject lines containing units/measurements/prices/phone numbers/dates
+  if (/\b\d+(?:[.,]\d+)?\s*(?:g|gr|gm|kg|mg|ml|l|oz|fl\.?\s*oz|lb|lbs|%|kcal|kj)\b/i.test(cleaned)) {
+    return false;
+  }
+  if (/\b\d{3}[-.\s]\d{3,4}\b/.test(cleaned)) return false;
+  if (/@/.test(cleaned)) return false;
+
+  const letterMatches = cleaned.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || [];
+  const digitMatches = cleaned.match(/\d/g) || [];
+  const nonSpaceLen = cleaned.replace(/\s+/g, '').length;
+  if (letterMatches.length < 3 || nonSpaceLen === 0) return false;
+  if (letterMatches.length / nonSpaceLen < 0.72) return false;
+  if (digitMatches.length / nonSpaceLen > 0.22) return false;
+
+  // Reject OCR noise made mostly of 1-2 letter fragments
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length > 8) return false;
+  const realWords = words.filter((w) => /[A-Za-zÀ-ÖØ-öø-ÿ]{3,}/.test(w));
+  if (realWords.length === 0) return false;
+  if (words.length >= 3 && realWords.length / words.length < 0.5) return false;
+
+  return true;
+}
+
+/**
+ * Best-effort extraction of the item / product name if visible on the photographed label
+ * (typically printed above the Nutrition Facts / Nutrition Information box).
+ * Returns a clean string or null when no reliable product name is present.
+ */
+export function extractProductName(rows) {
+  if (!rows || rows.length === 0) return null;
+
+  // Locate where the nutrition panel begins
+  let nutritionStartIdx = rows.length;
+  for (let i = 0; i < rows.length; i++) {
+    if (NUTRITION_HEADER_START_RE.test(rows[i].text) || matchTotalFatRow(rows[i].text)) {
+      nutritionStartIdx = i;
+      break;
+    }
+  }
+
+  // Compute median row height if bounding boxes exist (titles tend to be larger than table text)
+  const heights = rows
+    .filter((r) => r.bbox && r.bbox.y1 > r.bbox.y0)
+    .map((r) => r.bbox.y1 - r.bbox.y0)
+    .sort((a, b) => a - b);
+  const medianRowH = heights.length > 0 ? heights[Math.floor(heights.length / 2)] : null;
+
+  // Priority 1: Scan clean lines ABOVE the nutrition panel
+  const aboveCandidates = [];
+  for (let i = 0; i < nutritionStartIdx; i++) {
+    const row = rows[i];
+    if (!isPlausibleProductLine(row.text)) continue;
+
+    const cleaned = cleanProductTitle(row.text);
+    const wordCount = cleaned.split(/\s+/).length;
+    let score = 50;
+
+    // Closer to top of nutrition panel is very often the product title
+    const distAbove = nutritionStartIdx - i;
+    if (distAbove <= 2) score += 16;
+    else if (distAbove <= 4) score += 8;
+
+    // Prefer 2-5 descriptive words over a lone generic word
+    if (wordCount >= 2 && wordCount <= 5) score += 16;
+    else if (wordCount === 1 && cleaned.length >= 5) score += 4;
+
+    // Larger font height bonus when bboxes are available
+    if (medianRowH && row.bbox) {
+      const h = row.bbox.y1 - row.bbox.y0;
+      if (h >= medianRowH * 1.25) score += 24;
+      else if (h >= medianRowH * 1.08) score += 10;
+    }
+
+    aboveCandidates.push({ index: i, cleaned, score });
+  }
+
+  if (aboveCandidates.length > 0) {
+    aboveCandidates.sort((a, b) => b.score - a.score || a.index - b.index);
+    const best = aboveCandidates[0];
+
+    // If two immediately adjacent clean short title lines sit above the table (e.g. "Chobani" + "Greek Yogurt"), combine them!
+    const partner = aboveCandidates.find(
+      (c) =>
+        Math.abs(c.index - best.index) === 1 &&
+        c.cleaned.toLowerCase() !== best.cleaned.toLowerCase() &&
+        c.cleaned.length + best.cleaned.length + 1 <= 42 &&
+        c.cleaned.split(/\s+/).length <= 3 &&
+        best.cleaned.split(/\s+/).length <= 3
+    );
+    if (partner) {
+      const first = partner.index < best.index ? partner.cleaned : best.cleaned;
+      const second = partner.index < best.index ? best.cleaned : partner.cleaned;
+      return `${first} ${second}`;
+    }
+    return best.cleaned;
+  }
+
+  return null;
+}
+
 /**
  * Combine complementary findings across multiple OCR passes of the same image.
  * Example: Pass 1 cleanly reads "Serving size (55g)" on the top of a curved jar,
@@ -1160,6 +1309,8 @@ function round2(n) {
 export function combineScanPasses(passA, passB) {
   if (!passA) return passB;
   if (!passB) return passA;
+
+  const sharedProductName = passA.productName || passB.productName || null;
 
   // Prefer clean success without warning
   const score = (r) => {
@@ -1194,6 +1345,7 @@ export function combineScanPasses(passA, passB) {
         mode: 'converted_from_serving',
         servingWeightG: servPass.servingWeightG,
         servingRaw: servPass.servingRaw || `${servPass.servingWeightG}g`,
+        productName: sharedProductName,
         classification: classifyFatLevel(fatPer100g),
         warning,
         explanation: `Calculated from ${fatPass.fatRawValue}g fat per ${servPass.servingRaw || `${servPass.servingWeightG}g`} serving (${fatPass.fatRawValue} ÷ ${servPass.servingWeightG} × 100)`,
@@ -1206,7 +1358,11 @@ export function combineScanPasses(passA, passB) {
   const mergedBA = tryMerge(passB, passA);
   const candidates = [passA, passB, mergedAB, mergedBA].filter(Boolean);
   candidates.sort((a, b) => score(b) - score(a));
-  return candidates[0];
+  const winner = candidates[0];
+  if (sharedProductName && !winner.productName) {
+    return { ...winner, productName: sharedProductName };
+  }
+  return winner;
 }
 
 /**
@@ -1222,6 +1378,8 @@ export function parseNutritionLabel(ocrInput) {
   const primaryRows = spatialRows.length > 0 ? spatialRows : textRows;
   const rawText = (ocrData.text || primaryRows.map((r) => r.text).join('\n')).trim();
 
+  const productName = extractProductName(primaryRows) || (spatialRows.length > 0 ? extractProductName(textRows) : null);
+
   let parsed = attemptParseRows(primaryRows, rawText);
 
   // If spatial reconstruction missed something plain text caught (or only got needs_serving), try textRows too
@@ -1232,6 +1390,7 @@ export function parseNutritionLabel(ocrInput) {
 
   return {
     ...parsed,
+    productName: parsed.productName || productName || null,
     tiltAngleDeg,
   };
 }

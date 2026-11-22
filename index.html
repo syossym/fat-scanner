@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Fat100" />
   <meta name="theme-color" content="#F7F5F0" />
-  <link rel="manifest" href="./manifest.json?v=4" />
+  <link rel="manifest" href="./manifest.json?v=5" />
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
 
@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="./styles.css?v=4" />
+  <link rel="stylesheet" href="./styles.css?v=5" />
 
   <!-- Early boot diagnostic capture (runs before ES modules so even load/CDN errors appear in Settings -> Technical Log) -->
   <script>
@@ -31,7 +31,7 @@
         if (logs.length > 80) logs.shift();
       }
       window.__fat100PushBootLog = push;
-      push('INFO', 'BOOT', 'Page loaded (v1.2.2)', location.href);
+      push('INFO', 'BOOT', 'Page loaded (v1.2.3)', location.href);
       window.addEventListener('error', function (e) {
         if (window.__fat100LoggerReady) return;
         push('ERR', 'BOOT', e.message || 'Script error', (e.filename || '') + ':' + (e.lineno || 0));
@@ -339,7 +339,7 @@
           <dl class="status-grid">
             <div class="status-row">
               <dt>App version</dt>
-              <dd id="diag-version" class="mono-val">v1.2.2</dd>
+              <dd id="diag-version" class="mono-val">v1.2.3</dd>
             </div>
             <div class="status-row">
               <dt>OCR library</dt>
@@ -422,6 +422,6 @@
       document.head.appendChild(s);
     })()"
   ></script>
-  <script type="module" src="./js/app.js?v=4"></script>
+  <script type="module" src="./js/app.js?v=5"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
-import { logger, APP_VERSION } from './logger.js?v=4';
-import { parseNutritionLabel, combineScanPasses, classifyFatLevel } from './parser.js?v=4';
+import { logger, APP_VERSION } from './logger.js?v=5';
+import { parseNutritionLabel, combineScanPasses, classifyFatLevel } from './parser.js?v=5';
 import {
   loadImageToCanvas,
   rotateCanvas90,
@@ -9,8 +9,8 @@ import {
   preprocessForOcr,
   mapOcrBboxToNormalized,
   releaseCanvas,
-} from './image-processor.js?v=4';
-import { createSampleLabelCanvas } from './sample-labels.js?v=4';
+} from './image-processor.js?v=5';
+import { createSampleLabelCanvas } from './sample-labels.js?v=5';
 
 window.__fat100LoggerReady = true;
 
@@ -593,6 +593,7 @@ function summarizeParse(parsed) {
     fatRaw: parsed.fatRawValue,
     servingG: parsed.servingWeightG,
     mode: parsed.mode,
+    productName: parsed.productName || undefined,
     matched: parsed.matchedLine,
     warning: parsed.warning || undefined,
   };
@@ -780,6 +781,9 @@ async function runScanPipeline(targetCanvas) {
 
     state.lastParsed = outcome.parsed;
     state.lastHighlightNorm = outcome.highlightNorm;
+    if (outcome.parsed.productName && !state.currentScanLabel) {
+      state.currentScanLabel = outcome.parsed.productName;
+    }
 
     renderResultView(outcome.parsed, outcome.highlightNorm);
     if (outcome.parsed.status === 'success' && outcome.parsed.fatPer100g !== null) {
@@ -860,6 +864,7 @@ function renderResultView(parsed, highlightNorm) {
     servingSummary,
     saturatedFatPer100g: parsed.saturatedFatPer100g,
     matchedLine: parsed.matchedLine,
+    itemName: state.currentScanLabel || parsed.productName || null,
   });
 
   if (assumedPer100 && displayFatPer100g !== null && !displayWarning) {
@@ -877,6 +882,7 @@ function applyDisplayMetrics({
   servingSummary = null,
   saturatedFatPer100g,
   matchedLine,
+  itemName = state.currentScanLabel,
 }) {
   const hasValue = status === 'success' && fatPer100g !== null && !Number.isNaN(fatPer100g);
 
@@ -885,7 +891,13 @@ function applyDisplayMetrics({
   els.fatScaleWrap?.classList.toggle('hidden', !hasValue);
 
   if (hasValue) {
-    if (els.resultEyebrow) els.resultEyebrow.textContent = basisUnit === '100ml' ? 'Fat content (liquid)' : 'Fat content';
+    if (els.resultEyebrow) {
+      els.resultEyebrow.textContent = itemName
+        ? itemName
+        : basisUnit === '100ml'
+        ? 'Fat content (liquid)'
+        : 'Fat content';
+    }
     els.fatPrefix?.classList.toggle('hidden', !isLessThan);
     if (els.fatNumber) els.fatNumber.textContent = formatFatNumber(fatPer100g);
     if (els.fatUnit) els.fatUnit.textContent = basisUnit === '100ml' ? 'g / 100ml' : 'g / 100g';
@@ -1238,11 +1250,17 @@ function saveToHistory(fatPer100g, basisUnit, label) {
     const items = loadHistory();
     const id = state.currentScanId || `scan_${Date.now()}`;
     const existingIdx = items.findIndex((it) => it.id === id);
+    const prevLabel = existingIdx >= 0 ? items[existingIdx].label : null;
+    const resolvedLabel =
+      (label && label.trim()) ||
+      (prevLabel && prevLabel !== 'Label scan' ? prevLabel : null) ||
+      'Label scan';
+
     const entry = {
       id,
       fatPer100g,
       basisUnit: basisUnit || '100g',
-      label: label || `Label scan`,
+      label: resolvedLabel,
       timestamp: Date.now(),
     };
 
@@ -1256,6 +1274,23 @@ function saveToHistory(fatPer100g, basisUnit, label) {
   } catch {
     // ignore
   }
+}
+
+function renameHistoryItem(id, newName) {
+  try {
+    const items = loadHistory();
+    const idx = items.findIndex((it) => it.id === id);
+    if (idx < 0) return;
+    const cleaned = String(newName || '').trim();
+    items[idx].label = cleaned || 'Label scan';
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items));
+    if (state.currentScanId === id) {
+      state.currentScanLabel = cleaned || null;
+    }
+  } catch {
+    // ignore
+  }
+  renderHistory();
 }
 
 function clearHistory() {
@@ -1282,15 +1317,63 @@ function renderHistory() {
     const main = document.createElement('div');
     main.className = 'history-item-main';
 
+    const nameBtn = document.createElement('button');
+    nameBtn.type = 'button';
+    nameBtn.className = 'history-item-name-btn';
+    nameBtn.title = 'Tap to rename';
+
     const name = document.createElement('span');
     name.className = 'history-item-name';
     name.textContent = item.label || 'Label scan';
+
+    const editIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    editIcon.setAttribute('width', '13');
+    editIcon.setAttribute('height', '13');
+    editIcon.setAttribute('viewBox', '0 0 24 24');
+    editIcon.setAttribute('fill', 'none');
+    editIcon.setAttribute('stroke', 'currentColor');
+    editIcon.setAttribute('stroke-width', '2');
+    editIcon.setAttribute('stroke-linecap', 'round');
+    editIcon.setAttribute('stroke-linejoin', 'round');
+    editIcon.setAttribute('aria-hidden', 'true');
+    editIcon.classList.add('history-edit-icon');
+    editIcon.innerHTML =
+      '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>';
+
+    nameBtn.append(name, editIcon);
+    nameBtn.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'history-name-input';
+      input.value = item.label && item.label !== 'Label scan' ? item.label : '';
+      input.placeholder = 'Item name…';
+      input.maxLength = 48;
+      let committed = false;
+      const commit = () => {
+        if (committed) return;
+        committed = true;
+        renameHistoryItem(item.id, input.value);
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        } else if (e.key === 'Escape') {
+          committed = true;
+          renderHistory();
+        }
+      });
+      nameBtn.replaceWith(input);
+      input.focus();
+      input.select();
+    });
 
     const time = document.createElement('span');
     time.className = 'history-item-time';
     time.textContent = formatRelativeTime(item.timestamp);
 
-    main.append(name, time);
+    main.append(nameBtn, time);
 
     const badge = document.createElement('span');
     badge.className = `history-item-val level-${cls.level}`;
