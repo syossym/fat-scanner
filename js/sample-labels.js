@@ -1,14 +1,17 @@
 /**
  * Generates realistic sample nutrition label canvases for instant on-device OCR testing.
- * Cycles between an EU/UK per-100g label and a US per-serving Nutrition Facts label.
+ * Cycles between an EU/UK per-100g label, a US per-serving Nutrition Facts label,
+ * and a round circular tub lid label with compact linear Nutrition Facts.
  */
 
 let sampleIndex = 0;
 
 export function createSampleLabelCanvas() {
-  const idx = sampleIndex % 2;
+  const idx = sampleIndex % 3;
   sampleIndex++;
-  return idx === 0 ? renderEuGranolaLabel() : renderUsNutritionFactsLabel();
+  if (idx === 0) return renderEuGranolaLabel();
+  if (idx === 1) return renderUsNutritionFactsLabel();
+  return renderRoundLidLabel();
 }
 
 function renderEuGranolaLabel() {
@@ -17,11 +20,9 @@ function renderEuGranolaLabel() {
   canvas.height = 680;
   const ctx = canvas.getContext('2d');
 
-  // Subtle paper background
   ctx.fillStyle = '#faf8f4';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Outer box
   ctx.fillStyle = '#ffffff';
   ctx.strokeStyle = '#1d1d1b';
   ctx.lineWidth = 4;
@@ -32,7 +33,6 @@ function renderEuGranolaLabel() {
   ctx.font = 'bold 34px Arial, Helvetica, sans-serif';
   ctx.fillText('Nutrition Information', 68, 94);
 
-  // Header divider
   ctx.fillRect(64, 114, 632, 6);
 
   ctx.font = 'bold 24px Arial, Helvetica, sans-serif';
@@ -147,5 +147,51 @@ function renderUsNutritionFactsLabel() {
   return {
     canvas,
     name: 'Sample: Whole Grain Cereal (US label)',
+  };
+}
+
+function renderRoundLidLabel() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 760;
+  canvas.height = 760;
+  const ctx = canvas.getContext('2d');
+
+  // Dark tabletop surrounding a round sticker (tests center-weighted contrast + circular label!)
+  ctx.fillStyle = '#2d2621';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Circular white sticker
+  ctx.beginPath();
+  ctx.arc(380, 380, 315, 0, Math.PI * 2);
+  ctx.fillStyle = '#fbfaf6';
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = '#242220';
+  ctx.stroke();
+
+  ctx.fillStyle = '#141414';
+  ctx.font = 'bold 34px Arial, Helvetica, sans-serif';
+  ctx.fillText('Nutrition Facts', 245, 195);
+
+  ctx.fillRect(140, 214, 480, 4);
+
+  ctx.font = '23px Arial, Helvetica, sans-serif';
+  ctx.fillText('Servings: about 8, Serv. size: 2 Tbsp (28g),', 142, 256);
+  ctx.font = 'bold 24px Arial, Helvetica, sans-serif';
+  ctx.fillText('Amount per serving: Calories 140,', 142, 298);
+  ctx.fillText('Total Fat 12g (15% DV), Sat. Fat 2g (10% DV),', 118, 342);
+  ctx.font = '23px Arial, Helvetica, sans-serif';
+  ctx.fillText('Trans Fat 0g, Cholest. 0mg (0% DV),', 155, 386);
+  ctx.fillText('Sodium 150mg (7% DV), Total Carb. 5g (2% DV),', 120, 428);
+  ctx.fillText('Fiber 2g (7% DV), Total Sugars 1g, Protein 4g.', 130, 470);
+
+  ctx.fillRect(150, 502, 460, 2);
+  ctx.font = '20px Arial, Helvetica, sans-serif';
+  ctx.fillStyle = '#444444';
+  ctx.fillText('Net Wt. 8 oz (227g)', 288, 548);
+
+  return {
+    canvas,
+    name: 'Sample: Hummus Tub (Round lid)',
   };
 }

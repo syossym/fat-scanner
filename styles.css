@@ -861,6 +861,7 @@ body {
 }
 
 .meta-item.mono {
+  display: block;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   max-width: 100%;

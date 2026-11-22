@@ -1,7 +1,9 @@
-import { parseNutritionLabel, classifyFatLevel } from './parser.js';
+import { parseNutritionLabel, combineScanPasses, classifyFatLevel } from './parser.js';
 import {
   loadImageToCanvas,
   rotateCanvas90,
+  rotateCanvasByAngle,
+  estimateSkewAngleFromCanvas,
   cropCanvas,
   preprocessForOcr,
   mapOcrBboxToNormalized,
@@ -47,6 +49,7 @@ const els = {
   resultWarning: document.getElementById('result-warning'),
   resultWarningText: document.getElementById('result-warning-text'),
   resultMetaStrip: document.getElementById('result-meta-strip'),
+  servingMeta: document.getElementById('serving-meta'),
   satFatMeta: document.getElementById('sat-fat-meta'),
   matchedLineMeta: document.getElementById('matched-line-meta'),
 
@@ -177,7 +180,6 @@ function showHomeView() {
 async function handleFileSelected(event) {
   const input = event.target;
   const file = input.files && input.files[0];
-  // Reset immediately so re-selecting or retaking triggers change next time
   input.value = '';
   if (!file) return;
 
@@ -225,7 +227,7 @@ async function handleRotateAndRescan() {
 }
 
 // ============================================================================
-// Tesseract.js v5 Worker & Multi-Pass OCR Pipeline
+// Tesseract.js v5 Worker & Multi-Pass OCR Pipeline (Flat + Round/Curved Labels)
 // ============================================================================
 
 function setProgress(label, percent) {
@@ -241,7 +243,6 @@ async function ensureTesseractWorker(onProgress) {
   if (state.workerPromise) return state.workerPromise;
 
   state.workerPromise = (async () => {
-    // Wait briefly if defer script is still parsing
     let waitTries = 0;
     while (!window.Tesseract && waitTries < 60) {
       await new Promise((r) => setTimeout(r, 100));
@@ -266,32 +267,36 @@ async function ensureTesseractWorker(onProgress) {
   return state.workerPromise;
 }
 
+function isCleanSuccess(parsed) {
+  return parsed && parsed.status === 'success' && !parsed.warning;
+}
+
 async function runScanPipeline(targetCanvas) {
   const myToken = ++state.scanToken;
   drawCanvasToTarget(targetCanvas, els.scanningPreviewCanvas);
 
-  let currentPhase = 'init';
   let activePass = 1;
 
   const handleWorkerLog = (m) => {
     if (myToken !== state.scanToken || !m) return;
     const p = typeof m.progress === 'number' ? m.progress : 0;
     if (m.status === 'loading tesseract core' || m.status === 'initializing tesseract') {
-      setProgress('Loading OCR engine (first time)…', 10 + p * 20);
+      setProgress('Loading OCR engine (first time)…', 10 + p * 18);
     } else if (m.status === 'loading language traineddata' || m.status === 'initializing api') {
-      setProgress('Downloading language model…', 30 + p * 25);
+      setProgress('Downloading language model…', 28 + p * 22);
     } else if (m.status === 'recognizing text') {
       if (activePass === 1) {
-        setProgress('Reading nutrition values…', 55 + p * 35);
+        setProgress('Reading nutrition values…', 50 + p * 25);
       } else if (activePass === 2) {
-        setProgress('Enhancing contrast & re-reading…', 72 + p * 20);
+        setProgress('Flattening shadows & glare…', 75 + p * 10);
+      } else if (activePass === 3) {
+        setProgress('Un-warping curved label edges…', 85 + p * 8);
       } else {
-        setProgress('Checking dark-label pass…', 85 + p * 12);
+        setProgress('Checking inverted contrast…', 93 + p * 5);
       }
     }
   };
 
-  // Serialize OCR calls so we never invoke worker.recognize concurrently
   const runJob = state.ocrBusyPromise.then(async () => {
     if (myToken !== state.scanToken) return null;
 
@@ -299,11 +304,17 @@ async function runScanPipeline(targetCanvas) {
     const worker = await ensureTesseractWorker(handleWorkerLog);
     if (myToken !== state.scanToken) return null;
 
-    // Pass 1: Enhanced grayscale + contrast stretch + auto-invert if dark
+    // Check for tilt (very common on round/circular labels!) via fast pixel projection (~10ms)
+    const pixelSkew = estimateSkewAngleFromCanvas(targetCanvas);
+    const didPixelDeskew = Math.abs(pixelSkew.angleDeg) >= 3.0 && pixelSkew.confidence >= 1.2;
+    const baseCanvas = didPixelDeskew
+      ? rotateCanvasByAngle(targetCanvas, pixelSkew.angleDeg)
+      : targetCanvas;
+
+    // Pass 1: Center-weighted enhanced grayscale (fast & accurate for flat & round labels)
     activePass = 1;
-    currentPhase = 'pass1';
-    const prep1 = preprocessForOcr(targetCanvas, 'enhanced');
-    setProgress('Reading nutrition values…', 55);
+    const prep1 = preprocessForOcr(baseCanvas, 'enhanced');
+    setProgress('Reading nutrition values…', 50);
     const res1 = await worker.recognize(
       prep1.canvas,
       {},
@@ -313,12 +324,18 @@ async function runScanPipeline(targetCanvas) {
 
     let bestParsed = parseNutritionLabel(res1.data);
     let bestPrep = prep1;
+    let bestCanvasForHighlight = didPixelDeskew ? null : targetCanvas;
+    const detectedTilt = bestParsed.tiltAngleDeg || 0;
 
-    // Pass 2 fallback: Adaptive local illumination normalization (great for shadows/glare)
-    if (bestParsed.status === 'not_found') {
+    // Pass 2: Local illumination flattening (+ deskew if Pass 1 didn't pixel-deskew and OCR detected tilt)
+    if (!isCleanSuccess(bestParsed)) {
       activePass = 2;
-      setProgress('Enhancing glare & shadows…', 70);
-      const prep2 = preprocessForOcr(targetCanvas, 'adaptive');
+      setProgress('Flattening shadows & glare…', 74);
+      const pass2Canvas =
+        !didPixelDeskew && Math.abs(detectedTilt) >= 2.5
+          ? rotateCanvasByAngle(targetCanvas, -detectedTilt)
+          : baseCanvas;
+      const prep2 = preprocessForOcr(pass2Canvas, 'adaptive');
       const res2 = await worker.recognize(
         prep2.canvas,
         {},
@@ -327,17 +344,25 @@ async function runScanPipeline(targetCanvas) {
       if (myToken !== state.scanToken) return null;
 
       const parsed2 = parseNutritionLabel(res2.data);
-      if (isBetterParse(parsed2, bestParsed)) {
-        bestParsed = parsed2;
+      const prevBest = bestParsed;
+      bestParsed = combineScanPasses(bestParsed, parsed2);
+      if (bestParsed === parsed2) {
         bestPrep = prep2;
+        bestCanvasForHighlight = pass2Canvas === targetCanvas ? targetCanvas : null;
+      } else if (bestParsed !== prevBest) {
+        bestPrep = prep1;
       }
     }
 
-    // Pass 3 fallback: Forced inversion for white-on-dark nutrition panels on bright packages
-    if (bestParsed.status === 'not_found') {
+    // Pass 3: Cylindrical horizontal edge un-warp + local flattening (rescues round jars, cans & bottles!)
+    if (!isCleanSuccess(bestParsed)) {
       activePass = 3;
-      setProgress('Trying inverted contrast…', 84);
-      const prep3 = preprocessForOcr(targetCanvas, 'inverted');
+      setProgress('Un-warping curved label edges…', 84);
+      const pass3Canvas =
+        !didPixelDeskew && Math.abs(detectedTilt) >= 2.5
+          ? rotateCanvasByAngle(targetCanvas, -detectedTilt)
+          : baseCanvas;
+      const prep3 = preprocessForOcr(pass3Canvas, 'dewarp');
       const res3 = await worker.recognize(
         prep3.canvas,
         {},
@@ -346,18 +371,44 @@ async function runScanPipeline(targetCanvas) {
       if (myToken !== state.scanToken) return null;
 
       const parsed3 = parseNutritionLabel(res3.data);
-      if (isBetterParse(parsed3, bestParsed)) {
-        bestParsed = parsed3;
+      const prevBest = bestParsed;
+      bestParsed = combineScanPasses(bestParsed, parsed3);
+      if (bestParsed === parsed3) {
         bestPrep = prep3;
+        bestCanvasForHighlight = null;
+      } else if (bestParsed !== prevBest && bestPrep === prep3) {
+        bestCanvasForHighlight = null;
+      }
+    }
+
+    // Pass 4: Fallback (if pixel-deskewed, try original adaptive; otherwise try inverted for dark panels)
+    if (bestParsed.status === 'not_found') {
+      activePass = 4;
+      setProgress('Checking inverted contrast…', 92);
+      const prep4 = preprocessForOcr(targetCanvas, didPixelDeskew ? 'adaptive' : 'inverted');
+      const res4 = await worker.recognize(
+        prep4.canvas,
+        {},
+        { text: true, blocks: true, tsv: true }
+      );
+      if (myToken !== state.scanToken) return null;
+
+      const parsed4 = parseNutritionLabel(res4.data);
+      const prevBest = bestParsed;
+      bestParsed = combineScanPasses(bestParsed, parsed4);
+      if (bestParsed === parsed4 && prevBest !== parsed4) {
+        bestPrep = prep4;
+        bestCanvasForHighlight = targetCanvas;
       }
     }
 
     setProgress('Calculating fat per 100g…', 98);
-    const highlightNorm = bestParsed.matchedBbox
-      ? mapOcrBboxToNormalized(bestParsed.matchedBbox, bestPrep, targetCanvas)
-      : null;
+    const highlightNorm =
+      bestParsed.matchedBbox && bestCanvasForHighlight
+        ? mapOcrBboxToNormalized(bestParsed.matchedBbox, bestPrep, bestCanvasForHighlight)
+        : null;
 
-    return { parsed: bestParsed, highlightNorm, phase: currentPhase };
+    return { parsed: bestParsed, highlightNorm };
   });
 
   state.ocrBusyPromise = runJob.catch(() => {});
@@ -379,14 +430,6 @@ async function runScanPipeline(targetCanvas) {
   }
 }
 
-function isBetterParse(candidate, current) {
-  const rank = { success: 3, needs_serving: 2, not_found: 1 };
-  if (rank[candidate.status] !== rank[current.status]) {
-    return rank[candidate.status] > rank[current.status];
-  }
-  return (candidate.rawText || '').length > (current.rawText || '').length;
-}
-
 // ============================================================================
 // Result View Rendering & Manual Quick Adjust
 // ============================================================================
@@ -394,7 +437,6 @@ function isBetterParse(candidate, current) {
 function renderResultView(parsed, highlightNorm) {
   switchView('result');
 
-  // Render captured photo + optional highlight box over detected Fat row
   drawCanvasToTarget(state.activeCanvas, els.resultPhotoCanvas);
   if (highlightNorm) {
     els.detectedHighlightBox.style.left = `${highlightNorm.x * 100}%`;
@@ -406,7 +448,6 @@ function renderResultView(parsed, highlightNorm) {
     els.detectedHighlightBox.classList.add('hidden');
   }
 
-  // Raw OCR text inspector
   els.rawOcrDetails.open = false;
   els.rawOcrText.textContent = parsed.rawText || '(No text recognized in this image)';
 
@@ -428,6 +469,11 @@ function renderResultView(parsed, highlightNorm) {
     Boolean(parsed.warning);
   setAdjustPanelOpen(shouldAutoOpen);
 
+  const servingSummary =
+    parsed.mode === 'converted_from_serving' && parsed.servingWeightG && parsed.fatRawValue !== null
+      ? `Serving: ${parsed.servingRaw || `${parsed.servingWeightG}g`} · ${parsed.fatRawValue}g fat`
+      : null;
+
   applyDisplayMetrics({
     status: parsed.status,
     fatPer100g: parsed.fatPer100g,
@@ -435,6 +481,7 @@ function renderResultView(parsed, highlightNorm) {
     isLessThan: parsed.isLessThan,
     explanation: parsed.explanation,
     warning: parsed.warning,
+    servingSummary,
     saturatedFatPer100g: parsed.saturatedFatPer100g,
     matchedLine: parsed.matchedLine,
   });
@@ -451,6 +498,7 @@ function applyDisplayMetrics({
   isLessThan,
   explanation,
   warning,
+  servingSummary = null,
   saturatedFatPer100g,
   matchedLine,
 }) {
@@ -495,8 +543,15 @@ function applyDisplayMetrics({
     els.resultWarning.classList.add('hidden');
   }
 
-  // Secondary metadata pills (saturated fat + matched OCR line)
   let metaCount = 0;
+  if (hasValue && servingSummary) {
+    els.servingMeta.textContent = servingSummary;
+    els.servingMeta.classList.remove('hidden');
+    metaCount++;
+  } else {
+    els.servingMeta.classList.add('hidden');
+  }
+
   if (hasValue && saturatedFatPer100g !== null && saturatedFatPer100g !== undefined) {
     els.satFatMeta.textContent = `Saturates: ${formatFatNumber(saturatedFatPer100g)} g / ${basisUnit}`;
     els.satFatMeta.classList.remove('hidden');
@@ -531,6 +586,7 @@ function renderErrorResult(message) {
     isLessThan: false,
     explanation: message,
     warning: null,
+    servingSummary: null,
     saturatedFatPer100g: null,
     matchedLine: null,
   });
@@ -574,6 +630,7 @@ function handleManualAdjustInput() {
         isLessThan: false,
         explanation: 'Enter the fat value per 100g, or switch to “Per serving” to convert.',
         warning: null,
+        servingSummary: null,
         saturatedFatPer100g: null,
         matchedLine: state.lastParsed?.matchedLine || null,
       });
@@ -589,6 +646,7 @@ function handleManualAdjustInput() {
       isLessThan: false,
       explanation: `Entered directly as ${formatFatNumber(rounded)}g per ${basisUnit}.`,
       warning,
+      servingSummary: null,
       saturatedFatPer100g: null,
       matchedLine: state.lastParsed?.matchedLine || null,
     });
@@ -607,6 +665,7 @@ function handleManualAdjustInput() {
             ? `Got ${fatVal}g fat — enter the serving weight in grams to calculate g / 100g.`
             : 'Enter both fat per serving and serving weight in grams.',
         warning: null,
+        servingSummary: null,
         saturatedFatPer100g: null,
         matchedLine: state.lastParsed?.matchedLine || null,
       });
@@ -626,6 +685,7 @@ function handleManualAdjustInput() {
       isLessThan: false,
       explanation: `Calculated from ${fatVal}g fat per ${servingVal}g serving (${fatVal} ÷ ${servingVal} × 100).`,
       warning,
+      servingSummary: `Serving: ${servingVal}g · ${fatVal}g fat`,
       saturatedFatPer100g: null,
       matchedLine: state.lastParsed?.matchedLine || null,
     });
