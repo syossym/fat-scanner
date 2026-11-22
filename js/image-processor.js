@@ -3,16 +3,37 @@
  *
  * Designed for iOS Safari memory safety and high Tesseract.js v5 accuracy,
  * including round/circular stickers and cylindrical jars, cans, and bottles:
- * - Caps working canvas dimensions to stay safely inside iPhone Safari memory limits
- * - Center-weighted luminance statistics so dark backgrounds around round labels never trigger false inversion
- * - Auto-upscales tight crops so characters hit Tesseract LSTM's sweet spot
- * - Local illumination flattening ('adaptive') to remove cylindrical shadows & glare bands
- * - Cylindrical edge un-warping ('dewarp') to un-squash compressed numbers near curved bottle/jar edges
- * - Arbitrary-angle deskew rotation for tilted round/circular labels
+ * - Caps working & OCR canvas dimensions to 1400px to stay safely under iOS WebKit canvas limits
+ * - Explicitly releases intermediate canvas backing stores (width = height = 0)
+ * - Uses Uint32Array integral images (50% lower RAM than Float64Array)
+ * - Center-weighted luminance stats so dark backgrounds around round labels never trigger false inversion
+ * - Fast pixel projection-profile auto-deskew (-42..+42 deg) for tilted round/circular labels
+ * - Local illumination flattening ('adaptive') & cylindrical edge un-warping ('dewarp')
  */
 
-const MAX_WORKING_DIM = 1800;
+const MAX_WORKING_DIM = 1400;
 const OCR_PADDING = 28;
+
+/**
+ * Release an HTMLCanvasElement's GPU/backing memory immediately (important on iOS Safari).
+ */
+export function releaseCanvas(canvas) {
+  if (!canvas) return;
+  try {
+    canvas.width = 0;
+    canvas.height = 0;
+  } catch {
+    // ignore
+  }
+}
+
+function get2dContext(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    throw new Error('Browser ran out of canvas memory. Try closing other tabs or retaking a closer photo.');
+  }
+  return ctx;
+}
 
 /**
  * Load a File, Blob, Image, Canvas, or URL into a memory-safe working canvas.
@@ -60,7 +81,7 @@ export async function loadImageToCanvas(source, maxDim = MAX_WORKING_DIM) {
     const canvas = document.createElement('canvas');
     canvas.width = dstW;
     canvas.height = dstH;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const ctx = get2dContext(canvas);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = '#ffffff';
@@ -80,7 +101,7 @@ function scaleCanvasIfNeeded(src, maxDim) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(src.width * scale));
   canvas.height = Math.max(1, Math.round(src.height * scale));
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const ctx = get2dContext(canvas);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
@@ -94,7 +115,7 @@ export function rotateCanvas90(sourceCanvas) {
   const out = document.createElement('canvas');
   out.width = sourceCanvas.height;
   out.height = sourceCanvas.width;
-  const ctx = out.getContext('2d', { willReadFrequently: true });
+  const ctx = get2dContext(out);
   ctx.translate(out.width / 2, out.height / 2);
   ctx.rotate(Math.PI / 2);
   ctx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
@@ -110,25 +131,23 @@ export function rotateCanvasByAngle(sourceCanvas, angleDeg) {
   const rad = (angleDeg * Math.PI) / 180;
   const absCos = Math.abs(Math.cos(rad));
   const absSin = Math.abs(Math.sin(rad));
-  const outW = Math.min(
-    MAX_WORKING_DIM,
-    Math.ceil(sourceCanvas.width * absCos + sourceCanvas.height * absSin)
-  );
-  const outH = Math.min(
-    MAX_WORKING_DIM,
-    Math.ceil(sourceCanvas.width * absSin + sourceCanvas.height * absCos)
-  );
+  const rawW = Math.ceil(sourceCanvas.width * absCos + sourceCanvas.height * absSin);
+  const rawH = Math.ceil(sourceCanvas.width * absSin + sourceCanvas.height * absCos);
+  const fitScale = Math.min(1, MAX_WORKING_DIM / Math.max(rawW, rawH));
+  const outW = Math.max(1, Math.round(rawW * fitScale));
+  const outH = Math.max(1, Math.round(rawH * fitScale));
 
   const out = document.createElement('canvas');
   out.width = outW;
   out.height = outH;
-  const ctx = out.getContext('2d', { willReadFrequently: true });
+  const ctx = get2dContext(out);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, outW, outH);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.translate(outW / 2, outH / 2);
   ctx.rotate(rad);
+  if (fitScale < 1) ctx.scale(fitScale, fitScale);
   ctx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
   return out;
 }
@@ -136,9 +155,7 @@ export function rotateCanvasByAngle(sourceCanvas, angleDeg) {
 /**
  * Estimate clockwise rotation angle (in degrees, -42..+42) needed to make text lines
  * perfectly horizontal, using a fast projection-profile variance search on local-dark ink pixels.
- * Ignores outer dark backgrounds around circular stickers and works even when OCR returns 0 words!
- *
- * Returns { angleDeg, confidence } where confidence = bestScore / zeroAngleScore.
+ * Ignores outer dark backgrounds around circular stickers and works even when OCR returns 0 words.
  */
 export function estimateSkewAngleFromCanvas(sourceCanvas) {
   const maxSide = 220;
@@ -149,14 +166,18 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
   const small = document.createElement('canvas');
   small.width = w;
   small.height = h;
-  const ctx = small.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(sourceCanvas, 0, 0, w, h);
-  const data = ctx.getImageData(0, 0, w, h).data;
+  let data;
+  try {
+    const ctx = get2dContext(small);
+    ctx.drawImage(sourceCanvas, 0, 0, w, h);
+    data = ctx.getImageData(0, 0, w, h).data;
+  } finally {
+    releaseCanvas(small);
+  }
 
-  // Grayscale + integral image for fast local mean (isolates ink from dark tabletop corners!)
   const gray = new Uint8Array(w * h);
   const stride = w + 1;
-  const integral = new Float64Array(stride * (h + 1));
+  const integral = new Uint32Array(stride * (h + 1));
   for (let y = 0; y < h; y++) {
     let rowSum = 0;
     const srcRow = y * w;
@@ -171,7 +192,6 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
     }
   }
 
-  // Collect ink coordinates inside an inner elliptical/central ROI (skip outer borders)
   const radWin = Math.max(6, Math.round(Math.min(w, h) / 18));
   const halfW = w / 2;
   const halfH = h / 2;
@@ -195,7 +215,6 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
         integral[y1 * stride + x1];
       const localMean = sum / area;
       const lum = gray[rowOff + x];
-      // Crisp dark ink on light paper (ignores uniform dark tabletop outside a circular label!)
       if (localMean > 85 && lum < localMean - 22) {
         inkX.push(x - halfW);
         inkY.push(y - halfH);
@@ -208,8 +227,8 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
   }
 
   const diag = Math.ceil(Math.hypot(w, h));
-  const bins = new Uint32Array(diag * 2 + 4);
-  const offset = diag + 2;
+  const bins = new Uint32Array(diag * 2 + 6);
+  const offset = diag + 3;
 
   const scoreAngle = (deg) => {
     const rad = (deg * Math.PI) / 180;
@@ -220,9 +239,11 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
     let maxB = offset;
     for (let i = 0; i < inkX.length; i++) {
       const b = Math.round(inkX[i] * s + inkY[i] * c) + offset;
-      bins[b]++;
-      if (b < minB) minB = b;
-      if (b > maxB) maxB = b;
+      if (b >= 0 && b < bins.length) {
+        bins[b]++;
+        if (b < minB) minB = b;
+        if (b > maxB) maxB = b;
+      }
     }
     let energy = 0;
     for (let b = minB; b <= maxB; b++) {
@@ -236,7 +257,6 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
   let bestAngle = 0;
   let bestScore = zeroScore;
 
-  // Coarse search -42..+42 deg in 3-deg steps
   for (let deg = -42; deg <= 42; deg += 3) {
     if (deg === 0) continue;
     const sc = scoreAngle(deg);
@@ -246,7 +266,6 @@ export function estimateSkewAngleFromCanvas(sourceCanvas) {
     }
   }
 
-  // Fine search around best coarse angle in 0.5-deg steps
   const fineStart = Math.max(-44, bestAngle - 3);
   const fineEnd = Math.min(44, bestAngle + 3);
   for (let deg = fineStart; deg <= fineEnd; deg += 0.5) {
@@ -273,29 +292,27 @@ export function unwrapCylinderCanvas(sourceCanvas, halfArcRad = 0.92) {
   const srcW = sourceCanvas.width;
   const srcH = sourceCanvas.height;
   const sinMax = Math.sin(halfArcRad);
-  // Output width expands by halfArcRad / sin(halfArcRad) (~1.16x) to preserve center scale
   const outW = Math.min(MAX_WORKING_DIM, Math.round(srcW * (halfArcRad / sinMax)));
   const outH = srcH;
 
-  const srcCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  const srcCtx = get2dContext(sourceCanvas);
   const srcData = srcCtx.getImageData(0, 0, srcW, srcH).data;
 
   const out = document.createElement('canvas');
   out.width = outW;
   out.height = outH;
-  const outCtx = out.getContext('2d', { willReadFrequently: true });
+  const outCtx = get2dContext(out);
   const outImg = outCtx.createImageData(outW, outH);
   const dst = outImg.data;
 
-  // Precompute horizontal source mapping table (bilinear X interpolation)
   const mapX0 = new Int32Array(outW);
   const mapX1 = new Int32Array(outW);
   const mapFx = new Float32Array(outW);
   const halfSrc = (srcW - 1) / 2;
 
   for (let x = 0; x < outW; x++) {
-    const u = (x / (outW - 1)) * 2 - 1; // [-1, 1] along unwrapped arc
-    const uSrc = Math.sin(u * halfArcRad) / sinMax; // [-1, 1] projected on flat photo
+    const u = (x / Math.max(1, outW - 1)) * 2 - 1;
+    const uSrc = Math.sin(u * halfArcRad) / sinMax;
     const sx = Math.max(0, Math.min(srcW - 1, (uSrc + 1) * halfSrc));
     const ix0 = Math.floor(sx);
     const ix1 = Math.min(srcW - 1, ix0 + 1);
@@ -336,15 +353,11 @@ export function cropCanvas(sourceCanvas, rectNorm) {
   const out = document.createElement('canvas');
   out.width = sw;
   out.height = sh;
-  const ctx = out.getContext('2d', { willReadFrequently: true });
+  const ctx = get2dContext(out);
   ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
   return out;
 }
 
-/**
- * Compute luminance percentiles on the center 55% x 55% ROI so dark backgrounds
- * surrounding a circular sticker or round jar don't trick auto-inversion.
- */
 function computeCenterStats(gray, width, height) {
   const xStart = Math.floor(width * 0.22);
   const xEnd = Math.max(xStart + 1, Math.ceil(width * 0.78));
@@ -392,27 +405,20 @@ function computeCenterStats(gray, width, height) {
 
 /**
  * Preprocess a canvas for Tesseract.js OCR.
- *
- * Modes:
- * - 'enhanced': Grayscale + center-weighted contrast stretch + safe auto-invert + gentle sharpen + white border
- * - 'adaptive': Local integral-image illumination flattening (erases cylindrical shadows & glare gradients)
- * - 'dewarp':   Cylindrical horizontal un-warp + local illumination flattening (best for round jars/cans/bottles)
- * - 'inverted': Force inverted enhanced grayscale (great for white text inside a dark box on bright packaging)
- *
- * Returns { canvas, scale, padding, isTransformed } so OCR bounding boxes map cleanly back to sourceCanvas.
+ * Modes: 'enhanced' | 'adaptive' | 'dewarp' | 'inverted'.
  */
 export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
-  const baseCanvas = mode === 'dewarp' ? unwrapCylinderCanvas(sourceCanvas) : sourceCanvas;
+  const createdTempBase = mode === 'dewarp';
+  const baseCanvas = createdTempBase ? unwrapCylinderCanvas(sourceCanvas) : sourceCanvas;
   const srcW = baseCanvas.width;
   const srcH = baseCanvas.height;
 
-  // Upscale small tight crops so text has enough pixel height for Tesseract LSTM
   let scale = 1;
   const maxSide = Math.max(srcW, srcH);
-  if (maxSide < 950) {
-    scale = Math.min(2.2, 1150 / maxSide);
-  } else if (maxSide > 1750) {
-    scale = 1750 / maxSide;
+  if (maxSide < 900) {
+    scale = Math.min(2.0, 1100 / maxSide);
+  } else if (maxSide > MAX_WORKING_DIM) {
+    scale = MAX_WORKING_DIM / maxSide;
   }
 
   const innerW = Math.max(1, Math.round(srcW * scale));
@@ -422,7 +428,7 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
   const canvas = document.createElement('canvas');
   canvas.width = innerW + pad * 2;
   canvas.height = innerH + pad * 2;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const ctx = get2dContext(canvas);
 
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -430,7 +436,11 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(baseCanvas, 0, 0, srcW, srcH, pad, pad, innerW, innerH);
 
-  // Read inner region only so white padding doesn't skew histograms
+  // Immediately release unwrapped temporary canvas
+  if (createdTempBase) {
+    releaseCanvas(baseCanvas);
+  }
+
   const imgData = ctx.getImageData(pad, pad, innerW, innerH);
   const data = imgData.data;
   const pixelCount = innerW * innerH;
@@ -445,9 +455,8 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
 
   if (mode === 'adaptive' || mode === 'dewarp') {
     const invertForLocal = pMed < 92;
-    // Integral-image local illumination normalization (flattens cylindrical falloff & glare)
     const stride = innerW + 1;
-    const integral = new Float64Array(stride * (innerH + 1));
+    const integral = new Uint32Array(stride * (innerH + 1));
     for (let y = 0; y < innerH; y++) {
       let rowSum = 0;
       const srcRow = y * innerW;
@@ -460,7 +469,7 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
       }
     }
 
-    const radius = Math.max(14, Math.min(42, Math.round(Math.min(innerW, innerH) / 22)));
+    const radius = Math.max(14, Math.min(38, Math.round(Math.min(innerW, innerH) / 22)));
     for (let y = 0; y < innerH; y++) {
       const y1 = Math.max(0, y - radius);
       const y2 = Math.min(innerH - 1, y + radius);
@@ -477,7 +486,6 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
         const localMean = sum / area;
         const orig = invertForLocal ? 255 - gray[srcRow + x] : gray[srcRow + x];
 
-        // Soft local normalization preserving anti-aliased thin strokes & decimals
         const ratio = localMean > 8 ? orig / localMean : 1;
         let outVal;
         if (ratio < 0.82) {
@@ -495,7 +503,6 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
       }
     }
   } else {
-    // Linear contrast stretch + optional inversion
     const span = Math.max(24, pHigh - pLow);
     const stretched = new Uint8Array(pixelCount);
     for (let p = 0; p < pixelCount; p++) {
@@ -506,7 +513,6 @@ export function preprocessForOcr(sourceCanvas, mode = 'enhanced') {
       stretched[p] = norm;
     }
 
-    // Gentle 3x3 unsharp mask to crisp up printed nutrition text
     const amount = 0.55;
     for (let y = 0; y < innerH; y++) {
       const rowOff = y * innerW;
